@@ -1,3 +1,5 @@
+// src/main/java/com/lox/inventoryservice/api/controllers/InventoryController.java
+
 package com.lox.inventoryservice.api.controllers;
 
 import com.lox.inventoryservice.api.exceptions.InventoryNotFoundException;
@@ -48,7 +50,7 @@ public class InventoryController {
     }
 
     @GetMapping("/{productId}")
-    public Mono<ResponseEntity<Inventory>> getInventoryByProductId(
+    public Mono<ResponseEntity<InventoryResponse>> getInventoryByProductId(
             @PathVariable("productId") UUID productId) {
         return inventoryService.getInventoryByProductId(productId)
                 .map(ResponseEntity::ok)
@@ -62,7 +64,7 @@ public class InventoryController {
     }
 
     @PutMapping("/{productId}")
-    public Mono<ResponseEntity<Inventory>> updateInventory(
+    public Mono<ResponseEntity<InventoryResponse>> updateInventory(
             @PathVariable("productId") UUID productId,
             @Valid @RequestBody Inventory inventory) {
         return inventoryService.updateInventory(productId, inventory)
@@ -72,7 +74,7 @@ public class InventoryController {
                         return Mono.just(ResponseEntity.notFound().build());
                     }
                     log.error("Error in updateInventory: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(500).build());
+                    return Mono.just(ResponseEntity.status(500).body(null));
                 });
     }
 
@@ -96,7 +98,7 @@ public class InventoryController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String sort) {
 
-        // Validaciones de parámetros
+        // Validate parameters
         if (page < 0) {
             return Mono.just(ResponseEntity.badRequest().build());
         }
@@ -105,7 +107,7 @@ public class InventoryController {
             return Mono.just(ResponseEntity.badRequest().build());
         }
 
-        // Construir Pageable
+        // Build Pageable
         Pageable pageable;
         if (sort != null && !sort.isEmpty()) {
             String[] sortParams = sort.split(",");
@@ -128,24 +130,24 @@ public class InventoryController {
     }
 
     @PostMapping("/reserve")
-    public Mono<ResponseEntity<Void>> reserveInventory(@RequestParam UUID productId,
+    public Mono<ResponseEntity<InventoryResponse>> reserveInventory(@RequestParam UUID productId,
             @RequestParam Integer quantity) {
         return inventoryService.reserveInventory(productId, quantity)
-                .then(Mono.just(ResponseEntity.ok().<Void>build()))
+                .map(ResponseEntity::ok)
                 .onErrorResume(e -> {
                     log.error("Error in reserveInventory: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(500).build());
+                    return Mono.just(ResponseEntity.status(500).body(null));
                 });
     }
 
     @PostMapping("/release")
-    public Mono<ResponseEntity<Void>> releaseInventory(@RequestParam UUID productId,
+    public Mono<ResponseEntity<InventoryResponse>> releaseInventory(@RequestParam UUID productId,
             @RequestParam Integer quantity) {
         return inventoryService.releaseInventory(productId, quantity)
-                .then(Mono.just(ResponseEntity.ok().<Void>build()))
+                .map(ResponseEntity::ok)
                 .onErrorResume(e -> {
                     log.error("Error in releaseInventory: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(500).build());
+                    return Mono.just(ResponseEntity.status(500).body(null));
                 });
     }
 }

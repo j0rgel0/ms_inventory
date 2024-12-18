@@ -10,7 +10,7 @@ import org.springframework.context.annotation.Configuration;
 @RequiredArgsConstructor
 public class KafkaTopics {
 
-    public static final String INVENTORY_EVENTS_TOPIC = "inventory.events";
+    public static final String INVENTORY_EVENTS_TOPIC = "inventory-events";
 
     private final KafkaConfig kafkaConfig;
 

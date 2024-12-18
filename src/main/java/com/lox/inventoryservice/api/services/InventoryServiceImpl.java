@@ -111,10 +111,7 @@ public class InventoryServiceImpl implements InventoryService {
                                                     savedInventory)
                                             .thenReturn(savedInventory)
                             )
-                            .map(savedInventory -> InventoryResponse.builder()
-                                    .inventory(savedInventory)
-                                    .product(product)
-                                    .build())
+                            .flatMap(savedInventory -> fetchProductAndBuildResponse(savedInventory))
                             .doOnSuccess(invResponse -> log.info(
                                     "Inventory created and cached for Product ID: {}",
                                     invResponse.getInventory().getProductId()))
@@ -129,18 +126,11 @@ public class InventoryServiceImpl implements InventoryService {
 
     }
 
-    public Mono<InventoryResponse> fallbackCreateInventory(Inventory inventory,
-            Throwable throwable) {
-        log.error("Fallback triggered for createInventory due to: {}", throwable.getMessage());
-        return Mono.error(new RuntimeException(
-                "Inventory creation is currently unavailable. Please try again later."));
-    }
-
     @Override
     @CircuitBreaker(name = "inventoryServiceCB", fallbackMethod = "fallbackGetInventoryByProductId")
     @Retry(name = "inventoryServiceRetry", fallbackMethod = "fallbackGetInventoryByProductId")
     @RateLimiter(name = "inventoryServiceRateLimiter", fallbackMethod = "fallbackGetInventoryByProductId")
-    public Mono<Inventory> getInventoryByProductId(UUID productId) {
+    public Mono<InventoryResponse> getInventoryByProductId(UUID productId) {
         log.info("Fetching inventory for Product ID: {}", productId);
         String key = productId.toString();
 
@@ -148,7 +138,7 @@ public class InventoryServiceImpl implements InventoryService {
                 .flatMap(cachedInventory -> {
                     if (cachedInventory != null) {
                         log.info("Inventory retrieved from cache for Product ID: {}", productId);
-                        return Mono.just(cachedInventory);
+                        return fetchProductAndBuildResponse(cachedInventory);
                     } else {
                         return Mono.empty();
                     }
@@ -162,16 +152,10 @@ public class InventoryServiceImpl implements InventoryService {
                                                         inventory)
                                                 .thenReturn(inventory)
                                 )
+                                .flatMap(this::fetchProductAndBuildResponse)
                 )
-                .doOnNext(inv -> log.info("Inventory retrieved for Product ID: {}",
-                        inv.getProductId()));
-    }
-
-    public Mono<Inventory> fallbackGetInventoryByProductId(UUID productId, Throwable throwable) {
-        log.error("Fallback triggered for getInventoryByProductId due to: {}",
-                throwable.getMessage());
-        return Mono.error(new RuntimeException(
-                "Inventory retrieval is currently unavailable. Please try again later."));
+                .doOnNext(invResponse -> log.info("Inventory retrieved for Product ID: {}",
+                        invResponse.getInventory().getProductId()));
     }
 
     @Override
@@ -179,7 +163,7 @@ public class InventoryServiceImpl implements InventoryService {
     @CircuitBreaker(name = "inventoryServiceCB", fallbackMethod = "fallbackUpdateInventory")
     @Retry(name = "inventoryServiceRetry", fallbackMethod = "fallbackUpdateInventory")
     @RateLimiter(name = "inventoryServiceRateLimiter", fallbackMethod = "fallbackUpdateInventory")
-    public Mono<Inventory> updateInventory(UUID productId, Inventory inventory) {
+    public Mono<InventoryResponse> updateInventory(UUID productId, Inventory inventory) {
         log.info("Updating inventory for Product ID: {}", productId);
 
         return inventoryRepository.findByProductId(productId)
@@ -210,17 +194,11 @@ public class InventoryServiceImpl implements InventoryService {
                                         updatedInventory)
                                 .thenReturn(updatedInventory)
                 )
-                .doOnSuccess(
-                        inv -> log.info("Inventory updated and cache refreshed for Product ID: {}",
-                                inv.getProductId()))
+                .flatMap(this::fetchProductAndBuildResponse)
+                .doOnSuccess(invResponse -> log.info(
+                        "Inventory updated and cache refreshed for Product ID: {}",
+                        invResponse.getInventory().getProductId()))
                 .doOnError(e -> log.error("Error updating inventory: {}", e.getMessage()));
-    }
-
-    public Mono<Inventory> fallbackUpdateInventory(UUID productId, Inventory inventory,
-            Throwable throwable) {
-        log.error("Fallback triggered for updateInventory due to: {}", throwable.getMessage());
-        return Mono.error(new RuntimeException(
-                "Inventory update is currently unavailable. Please try again later."));
     }
 
     @Override
@@ -248,12 +226,6 @@ public class InventoryServiceImpl implements InventoryService {
                 .doOnSuccess(v -> log.info("Inventory deleted and cache removed for Product ID: {}",
                         productId))
                 .doOnError(e -> log.error("Error deleting inventory: {}", e.getMessage()));
-    }
-
-    public Mono<Void> fallbackDeleteInventory(UUID productId, Throwable throwable) {
-        log.error("Fallback triggered for deleteInventory due to: {}", throwable.getMessage());
-        return Mono.error(new RuntimeException(
-                "Inventory deletion is currently unavailable. Please try again later."));
     }
 
     @Override
@@ -305,19 +277,12 @@ public class InventoryServiceImpl implements InventoryService {
                 .doOnError(e -> log.error("Error retrieving inventory page: {}", e.getMessage()));
     }
 
-    public Mono<InventoryPage> fallbackListInventory(List<String> filters, Pageable pageable,
-            Throwable throwable) {
-        log.error("Fallback triggered for listInventory due to: {}", throwable.getMessage());
-        return Mono.error(new RuntimeException(
-                "Inventory listing is currently unavailable. Please try again later."));
-    }
-
     @Override
     @Transactional
     @CircuitBreaker(name = "inventoryServiceCB", fallbackMethod = "fallbackReserveInventory")
     @Retry(name = "inventoryServiceRetry", fallbackMethod = "fallbackReserveInventory")
     @RateLimiter(name = "inventoryServiceRateLimiter", fallbackMethod = "fallbackReserveInventory")
-    public Mono<Void> reserveInventory(UUID productId, Integer quantity) {
+    public Mono<InventoryResponse> reserveInventory(UUID productId, Integer quantity) {
         log.info("Reserving {} units for Product ID: {}", quantity, productId);
 
         return inventoryRepository.findByProductId(productId)
@@ -349,18 +314,13 @@ public class InventoryServiceImpl implements InventoryService {
                 .flatMap(updatedInventory ->
                         hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
                                         updatedInventory)
-                                .then()
+                                .thenReturn(updatedInventory)
                 )
-                .then() // Returns Mono<Void>
-                .doOnSuccess(v -> log.info("Inventory reserved for Product ID: {}", productId))
+                .flatMap(this::fetchProductAndBuildResponse)
+                .doOnSuccess(invResponse -> log.info(
+                        "Inventory reserved and cache refreshed for Product ID: {}",
+                        invResponse.getInventory().getProductId()))
                 .doOnError(e -> log.error("Error reserving inventory: {}", e.getMessage()));
-    }
-
-    public Mono<Void> fallbackReserveInventory(UUID productId, Integer quantity,
-            Throwable throwable) {
-        log.error("Fallback triggered for reserveInventory due to: {}", throwable.getMessage());
-        return Mono.error(new RuntimeException(
-                "Inventory reservation is currently unavailable. Please try again later."));
     }
 
     @Override
@@ -368,7 +328,7 @@ public class InventoryServiceImpl implements InventoryService {
     @CircuitBreaker(name = "inventoryServiceCB", fallbackMethod = "fallbackReleaseInventory")
     @Retry(name = "inventoryServiceRetry", fallbackMethod = "fallbackReleaseInventory")
     @RateLimiter(name = "inventoryServiceRateLimiter", fallbackMethod = "fallbackReleaseInventory")
-    public Mono<Void> releaseInventory(UUID productId, Integer quantity) {
+    public Mono<InventoryResponse> releaseInventory(UUID productId, Integer quantity) {
         log.info("Releasing {} units for Product ID: {}", quantity, productId);
 
         return inventoryRepository.findByProductId(productId)
@@ -401,14 +361,61 @@ public class InventoryServiceImpl implements InventoryService {
                 .flatMap(updatedInventory ->
                         hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
                                         updatedInventory)
-                                .then()
+                                .thenReturn(updatedInventory)
                 )
-                .then() // Returns Mono<Void>
-                .doOnSuccess(v -> log.info("Inventory released for Product ID: {}", productId))
+                .flatMap(this::fetchProductAndBuildResponse)
+                .doOnSuccess(invResponse -> log.info(
+                        "Inventory released and cache refreshed for Product ID: {}",
+                        invResponse.getInventory().getProductId()))
                 .doOnError(e -> log.error("Error releasing inventory: {}", e.getMessage()));
     }
 
-    public Mono<Void> fallbackReleaseInventory(UUID productId, Integer quantity,
+    // Helper method to fetch Product and build InventoryResponse
+    private Mono<InventoryResponse> fetchProductAndBuildResponse(Inventory inventory) {
+        UUID productId = inventory.getProductId();
+        return productCatalogWebClient.get()
+                .uri("/api/products/{productId}", productId)
+                .retrieve()
+                .bodyToMono(Product.class)
+                .map(product -> InventoryResponse.builder()
+                        .inventory(inventory)
+                        .product(product)
+                        .build())
+                .doOnError(e -> log.error("Error fetching product details: {}", e.getMessage()));
+    }
+
+    // Fallback methods
+
+    public Mono<InventoryResponse> fallbackCreateInventory(Inventory inventory,
+            Throwable throwable) {
+        log.error("Fallback triggered for createInventory due to: {}", throwable.getMessage());
+        return Mono.error(new RuntimeException(
+                "Inventory creation is currently unavailable. Please try again later."));
+    }
+
+    public Mono<InventoryResponse> fallbackGetInventoryByProductId(UUID productId,
+            Throwable throwable) {
+        log.error("Fallback triggered for getInventoryByProductId due to: {}",
+                throwable.getMessage());
+        return Mono.error(new RuntimeException(
+                "Inventory retrieval is currently unavailable. Please try again later."));
+    }
+
+    public Mono<InventoryResponse> fallbackUpdateInventory(UUID productId, Inventory inventory,
+            Throwable throwable) {
+        log.error("Fallback triggered for updateInventory due to: {}", throwable.getMessage());
+        return Mono.error(new RuntimeException(
+                "Inventory update is currently unavailable. Please try again later."));
+    }
+
+    public Mono<InventoryResponse> fallbackReserveInventory(UUID productId, Integer quantity,
+            Throwable throwable) {
+        log.error("Fallback triggered for reserveInventory due to: {}", throwable.getMessage());
+        return Mono.error(new RuntimeException(
+                "Inventory reservation is currently unavailable. Please try again later."));
+    }
+
+    public Mono<InventoryResponse> fallbackReleaseInventory(UUID productId, Integer quantity,
             Throwable throwable) {
         log.error("Fallback triggered for releaseInventory due to: {}", throwable.getMessage());
         return Mono.error(new RuntimeException(
