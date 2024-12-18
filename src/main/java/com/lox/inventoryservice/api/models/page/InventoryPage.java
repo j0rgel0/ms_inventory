@@ -1,6 +1,6 @@
 package com.lox.inventoryservice.api.models.page;
 
-import com.lox.inventoryservice.api.models.Inventory;
+import com.lox.inventoryservice.api.models.responses.InventoryResponse;
 import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class InventoryPage {
 
-    private List<Inventory> inventories;
+    private List<InventoryResponse> inventories;
     private long totalElements;
     private int totalPages;
     private int currentPage;

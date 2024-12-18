@@ -3,6 +3,7 @@
 package com.lox.inventoryservice.api.services;
 
 import com.lox.inventoryservice.api.exceptions.InventoryNotFoundException;
+import com.lox.inventoryservice.api.exceptions.InsufficientStockException;
 import com.lox.inventoryservice.api.kafka.events.EventType;
 import com.lox.inventoryservice.api.kafka.events.InventoryAddedEvent;
 import com.lox.inventoryservice.api.kafka.events.InventoryReleasedEvent;
@@ -34,6 +35,7 @@ import org.springframework.data.relational.core.query.Update;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Service
@@ -98,8 +100,7 @@ public class InventoryServiceImpl implements InventoryService {
                     inventory.setReservedQuantity(0);
                     inventory.setLastUpdated(Instant.now());
 
-                    return r2dbcEntityTemplate.insert(
-                                    Inventory.class) // Changed from inventoryRepository.save
+                    return r2dbcEntityTemplate.insert(Inventory.class)
                             .using(inventory)
                             .flatMap(savedInventory ->
                                     eventProducer.publishEvent(EventType.INVENTORY_ADDED.getTopic(),
@@ -111,7 +112,7 @@ public class InventoryServiceImpl implements InventoryService {
                                                     savedInventory)
                                             .thenReturn(savedInventory)
                             )
-                            .flatMap(savedInventory -> fetchProductAndBuildResponse(savedInventory))
+                            .flatMap(this::fetchProductAndBuildResponse)
                             .doOnSuccess(invResponse -> log.info(
                                     "Inventory created and cached for Product ID: {}",
                                     invResponse.getInventory().getProductId()))
@@ -261,7 +262,7 @@ public class InventoryServiceImpl implements InventoryService {
                         .take(pageable.getPageSize()).collectList();
 
         return Mono.zip(totalElementsMono, inventoryMono)
-                .map(tuple -> {
+                .flatMap(tuple -> {
                     long totalElements = tuple.getT1();
                     List<Inventory> inventories = tuple.getT2();
                     int totalPages = (int) Math.ceil(
@@ -269,8 +270,17 @@ public class InventoryServiceImpl implements InventoryService {
                     int currentPage = pageable.getPageNumber();
                     int pageSize = pageable.getPageSize();
 
-                    return new InventoryPage(inventories, totalElements, totalPages, currentPage,
-                            pageSize);
+                    // Convert List<Inventory> to List<InventoryResponse>
+                    return Flux.fromIterable(inventories)
+                            .flatMap(this::fetchProductAndBuildResponse)
+                            .collectList()
+                            .map(inventoryResponses -> new InventoryPage(
+                                    inventoryResponses,
+                                    totalElements,
+                                    totalPages,
+                                    currentPage,
+                                    pageSize
+                            ));
                 })
                 .doOnSuccess(page -> log.info("Retrieved {} inventories out of {}",
                         page.getInventories().size(), page.getTotalElements()))
@@ -291,7 +301,7 @@ public class InventoryServiceImpl implements InventoryService {
                 .flatMap(inventory -> {
                     if (inventory.getAvailableQuantity() < quantity) {
                         log.warn("Insufficient stock for Product ID: {}", productId);
-                        return Mono.error(new RuntimeException("Insufficient stock available."));
+                        return Mono.error(new InsufficientStockException("Insufficient stock available."));
                     }
 
                     inventory.setAvailableQuantity(inventory.getAvailableQuantity() - quantity);
@@ -300,8 +310,7 @@ public class InventoryServiceImpl implements InventoryService {
 
                     return r2dbcEntityTemplate.update(Inventory.class)
                             .matching(Query.query(Criteria.where("product_id").is(productId)))
-                            .apply(Update.update("available_quantity",
-                                            inventory.getAvailableQuantity())
+                            .apply(Update.update("available_quantity", inventory.getAvailableQuantity())
                                     .set("reserved_quantity", inventory.getReservedQuantity())
                                     .set("last_updated", inventory.getLastUpdated()))
                             .thenReturn(inventory);
@@ -312,15 +321,14 @@ public class InventoryServiceImpl implements InventoryService {
                                 .thenReturn(updatedInventory)
                 )
                 .flatMap(updatedInventory ->
-                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
-                                        updatedInventory)
+                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(), updatedInventory)
                                 .thenReturn(updatedInventory)
                 )
                 .flatMap(this::fetchProductAndBuildResponse)
                 .doOnSuccess(invResponse -> log.info(
                         "Inventory reserved and cache refreshed for Product ID: {}",
                         invResponse.getInventory().getProductId()))
-                .doOnError(e -> log.error("Error reserving inventory: {}", e.getMessage()));
+                .doOnError(e -> log.error("Error reserving inventory: ", e));
     }
 
     @Override
@@ -381,7 +389,11 @@ public class InventoryServiceImpl implements InventoryService {
                         .inventory(inventory)
                         .product(product)
                         .build())
-                .doOnError(e -> log.error("Error fetching product details: {}", e.getMessage()));
+                .onErrorResume(e -> {
+                    log.error("Error fetching product details for Product ID {}: {}", productId, e.getMessage());
+                    return Mono.error(new RuntimeException("Failed to fetch product details."));
+                });
+
     }
 
     // Fallback methods

@@ -130,24 +130,21 @@ public class InventoryController {
     }
 
     @PostMapping("/reserve")
-    public Mono<ResponseEntity<InventoryResponse>> reserveInventory(@RequestParam UUID productId,
+    public Mono<ResponseEntity<InventoryResponse>> reserveInventory(
+            @RequestParam UUID productId,
             @RequestParam Integer quantity) {
         return inventoryService.reserveInventory(productId, quantity)
                 .map(ResponseEntity::ok)
-                .onErrorResume(e -> {
-                    log.error("Error in reserveInventory: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(500).body(null));
-                });
+                .doOnError(e -> log.error("Error in reserveInventory: ", e));
     }
 
     @PostMapping("/release")
-    public Mono<ResponseEntity<InventoryResponse>> releaseInventory(@RequestParam UUID productId,
+    public Mono<ResponseEntity<InventoryResponse>> releaseInventory(
+            @RequestParam UUID productId,
             @RequestParam Integer quantity) {
         return inventoryService.releaseInventory(productId, quantity)
                 .map(ResponseEntity::ok)
-                .onErrorResume(e -> {
-                    log.error("Error in releaseInventory: {}", e.getMessage());
-                    return Mono.just(ResponseEntity.status(500).body(null));
-                });
+                .doOnError(e -> log.error("Error in releaseInventory: ", e));
     }
+
 }
