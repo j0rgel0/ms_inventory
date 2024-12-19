@@ -1,5 +1,6 @@
 package com.lox.inventoryservice.api.kafka.events;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.lox.inventoryservice.api.models.Inventory;
 import java.time.Instant;
 import java.util.UUID;
@@ -34,6 +35,7 @@ public class InventoryUpdatedEvent implements Event {
     }
 
     @Override
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", timezone = "UTC")
     public Instant getTimestamp() {
         return timestamp;
     }
