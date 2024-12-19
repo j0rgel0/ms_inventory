@@ -1,12 +1,11 @@
 package com.lox.inventoryservice.api.kafka.events;
 
+import java.time.Instant;
+import java.util.UUID;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
-import java.util.UUID;
-import java.time.Instant;
 
 @Data
 @Builder

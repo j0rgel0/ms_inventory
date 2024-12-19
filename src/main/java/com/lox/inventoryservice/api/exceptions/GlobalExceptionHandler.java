@@ -1,5 +1,3 @@
-// src/main/java/com/lox/inventoryservice/api/exceptions/GlobalExceptionHandler.java
-
 package com.lox.inventoryservice.api.exceptions;
 
 import com.lox.inventoryservice.api.models.responses.ErrorResponse;
@@ -13,7 +11,8 @@ import reactor.core.publisher.Mono;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(InventoryNotFoundException.class)
-    public Mono<ResponseEntity<ErrorResponse>> handleInventoryNotFoundException(InventoryNotFoundException ex) {
+    public Mono<ResponseEntity<ErrorResponse>> handleInventoryNotFoundException(
+            InventoryNotFoundException ex) {
         ErrorResponse errorResponse = ErrorResponse.builder()
                 .message(ex.getMessage())
                 .build();
@@ -21,7 +20,8 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
-    public Mono<ResponseEntity<ErrorResponse>> handleIllegalArgumentException(IllegalArgumentException ex) {
+    public Mono<ResponseEntity<ErrorResponse>> handleIllegalArgumentException(
+            IllegalArgumentException ex) {
         ErrorResponse errorResponse = ErrorResponse.builder()
                 .message(ex.getMessage())
                 .build();
@@ -29,7 +29,8 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(InsufficientStockException.class)
-    public Mono<ResponseEntity<ErrorResponse>> handleInsufficientStockException(InsufficientStockException ex) {
+    public Mono<ResponseEntity<ErrorResponse>> handleInsufficientStockException(
+            InsufficientStockException ex) {
         ErrorResponse errorResponse = ErrorResponse.builder()
                 .message(ex.getMessage())
                 .build();
@@ -42,6 +43,7 @@ public class GlobalExceptionHandler {
                 .message("An unexpected error occurred.")
                 .details(ex.getMessage())
                 .build();
-        return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse));
+        return Mono.just(
+                ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse));
     }
 }

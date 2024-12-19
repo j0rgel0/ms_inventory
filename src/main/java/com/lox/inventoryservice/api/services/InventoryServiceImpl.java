@@ -2,8 +2,8 @@
 
 package com.lox.inventoryservice.api.services;
 
-import com.lox.inventoryservice.api.exceptions.InventoryNotFoundException;
 import com.lox.inventoryservice.api.exceptions.InsufficientStockException;
+import com.lox.inventoryservice.api.exceptions.InventoryNotFoundException;
 import com.lox.inventoryservice.api.kafka.events.EventType;
 import com.lox.inventoryservice.api.kafka.events.InventoryAddedEvent;
 import com.lox.inventoryservice.api.kafka.events.InventoryReleasedEvent;
@@ -301,7 +301,8 @@ public class InventoryServiceImpl implements InventoryService {
                 .flatMap(inventory -> {
                     if (inventory.getAvailableQuantity() < quantity) {
                         log.warn("Insufficient stock for Product ID: {}", productId);
-                        return Mono.error(new InsufficientStockException("Insufficient stock available."));
+                        return Mono.error(
+                                new InsufficientStockException("Insufficient stock available."));
                     }
 
                     inventory.setAvailableQuantity(inventory.getAvailableQuantity() - quantity);
@@ -310,7 +311,8 @@ public class InventoryServiceImpl implements InventoryService {
 
                     return r2dbcEntityTemplate.update(Inventory.class)
                             .matching(Query.query(Criteria.where("product_id").is(productId)))
-                            .apply(Update.update("available_quantity", inventory.getAvailableQuantity())
+                            .apply(Update.update("available_quantity",
+                                            inventory.getAvailableQuantity())
                                     .set("reserved_quantity", inventory.getReservedQuantity())
                                     .set("last_updated", inventory.getLastUpdated()))
                             .thenReturn(inventory);
@@ -321,7 +323,8 @@ public class InventoryServiceImpl implements InventoryService {
                                 .thenReturn(updatedInventory)
                 )
                 .flatMap(updatedInventory ->
-                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(), updatedInventory)
+                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
+                                        updatedInventory)
                                 .thenReturn(updatedInventory)
                 )
                 .flatMap(this::fetchProductAndBuildResponse)
@@ -390,7 +393,8 @@ public class InventoryServiceImpl implements InventoryService {
                         .product(product)
                         .build())
                 .onErrorResume(e -> {
-                    log.error("Error fetching product details for Product ID {}: {}", productId, e.getMessage());
+                    log.error("Error fetching product details for Product ID {}: {}", productId,
+                            e.getMessage());
                     return Mono.error(new RuntimeException("Failed to fetch product details."));
                 });
 

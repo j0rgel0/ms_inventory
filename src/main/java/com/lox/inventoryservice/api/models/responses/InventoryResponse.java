@@ -12,6 +12,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class InventoryResponse {
+
     private Inventory inventory;
     private Product product;
 }

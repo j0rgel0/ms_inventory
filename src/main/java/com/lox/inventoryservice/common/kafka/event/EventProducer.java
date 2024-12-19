@@ -25,14 +25,17 @@ public class EventProducer {
      */
     public <T extends Event> Mono<Void> publishEvent(String topic, Event event) {
         SenderRecord<String, Object, String> senderRecord = SenderRecord.create(
-                new org.apache.kafka.clients.producer.ProducerRecord<>(topic, event.getProductId().toString(), event),
+                new org.apache.kafka.clients.producer.ProducerRecord<>(topic,
+                        event.getProductId().toString(), event),
                 event.getEventType() // Correlation metadata, can be any unique identifier
         );
 
         return kafkaSender.send(Mono.just(senderRecord))
-                .doOnNext(result -> log.info("Successfully published event to {}: {} with offset [{}]",
+                .doOnNext(result -> log.info(
+                        "Successfully published event to {}: {} with offset [{}]",
                         topic, event, result.recordMetadata().offset()))
-                .doOnError(error -> log.error("Failed to publish event to {}: {}", topic, error.getMessage()))
+                .doOnError(error -> log.error("Failed to publish event to {}: {}", topic,
+                        error.getMessage()))
                 .then(); // Convert to Mono<Void>
     }
 }

@@ -1,5 +1,3 @@
-// src/main/java/com/lox/inventoryservice/api/controllers/InventoryController.java
-
 package com.lox.inventoryservice.api.controllers;
 
 import com.lox.inventoryservice.api.exceptions.InventoryNotFoundException;
