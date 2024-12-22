@@ -15,6 +15,7 @@ import com.lox.inventoryservice.api.kafka.events.OrderCreatedEventDTO;
 import com.lox.inventoryservice.api.kafka.events.OrderItemDTO;
 import com.lox.inventoryservice.api.kafka.events.OrderItemEvent;
 import com.lox.inventoryservice.api.kafka.events.ReasonDetail;
+import com.lox.inventoryservice.api.kafka.events.ReservedItemEvent;
 import com.lox.inventoryservice.api.models.Inventory;
 import com.lox.inventoryservice.api.models.Product;
 import com.lox.inventoryservice.api.models.page.InventoryPage;
@@ -399,22 +400,18 @@ public class InventoryServiceImpl implements InventoryService {
     @Retry(name = "inventoryServiceRetry", fallbackMethod = "fallbackReserveInventory")
     @RateLimiter(name = "inventoryServiceRateLimiter", fallbackMethod = "fallbackReserveInventory")
     public Mono<InventoryResponse> reserveInventory(UUID productId, Integer quantity) {
-        log.info("Entered reserveInventory for Product ID: {} with Quantity: {}", productId,
-                quantity);
+        log.info("Entered reserveInventory for Product ID: {} with Quantity: {}", productId, quantity);
 
         return inventoryRepository.findByProductId(productId)
                 .doOnSubscribe(subscription -> log.info(
-                        "Fetching Inventory from database for reservation for Product ID: {}",
-                        productId))
+                        "Fetching Inventory from DB for Product ID: {}", productId))
                 .switchIfEmpty(Mono.error(new InventoryNotFoundException(
                         "Inventory not found for Product ID: " + productId)))
                 .flatMap(inventory -> {
                     if (inventory.getAvailableQuantity() < quantity) {
-                        log.warn(
-                                "Insufficient stock for Product ID: {}. Available: {}, Requested: {}",
+                        log.warn("Insufficient stock for Product ID: {}. Available: {}, Requested: {}",
                                 productId, inventory.getAvailableQuantity(), quantity);
-                        return Mono.error(
-                                new InsufficientStockException("Insufficient stock available."));
+                        return Mono.error(new InsufficientStockException("Insufficient stock available."));
                     }
 
                     inventory.setAvailableQuantity(inventory.getAvailableQuantity() - quantity);
@@ -424,43 +421,42 @@ public class InventoryServiceImpl implements InventoryService {
 
                     return r2dbcEntityTemplate.update(Inventory.class)
                             .matching(Query.query(Criteria.where("product_id").is(productId)))
-                            .apply(Update.update("available_quantity",
-                                            inventory.getAvailableQuantity())
+                            .apply(Update.update("available_quantity", inventory.getAvailableQuantity())
                                     .set("reserved_quantity", inventory.getReservedQuantity())
                                     .set("last_updated", inventory.getLastUpdated()))
-                            .doOnSubscribe(subscription -> log.info(
-                                    "Updating Inventory in the database for reservation for Product ID: {}",
-                                    productId))
-                            .doOnSuccess(rowsUpdated -> log.info(
-                                    "Database update completed for reservation of Product ID: {}",
-                                    productId))
+                            .doOnSubscribe(sub -> log.info("Updating Inventory in DB for reservation (Product ID: {})", productId))
+                            .doOnSuccess(rows -> log.info("DB update completed for reservation (Product ID: {})", productId))
                             .thenReturn(inventory);
                 })
+                .flatMap(updatedInventory -> {
+                    InventoryReservedEvent event = InventoryReservedEvent.builder()
+                            .eventType(EventType.INVENTORY_RESERVED.name())
+                            .orderId(null)  // or pass an actual orderId if you have it
+                            .items(List.of())  // or whatever items you need
+                            .timestamp(Instant.now())
+                            .build();
+
+                    return eventProducer.publishEvent(EventType.INVENTORY_RESERVED.getTopic(), event)
+                            .then(Mono.defer(() -> {
+                                log.info("Published INVENTORY_RESERVED event for Inventory ID: {}",
+                                        updatedInventory.getInventoryId());
+                                return Mono.just(updatedInventory);
+                            }));
+                })
+
                 .flatMap(updatedInventory ->
-                        eventProducer.publishEvent(EventType.INVENTORY_RESERVED.getTopic(),
-                                        InventoryReservedEvent.fromInventory(updatedInventory))
-                                .doOnSuccess(aVoid -> log.info(
-                                        "Published INVENTORY_RESERVED event for Inventory ID: {}",
-                                        updatedInventory.getInventoryId()))
-                                .thenReturn(updatedInventory)
-                )
-                .flatMap(updatedInventory ->
-                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
-                                        updatedInventory)
-                                .doOnSuccess(aBoolean -> log.info(
-                                        "Cached reserved Inventory ID: {} in Redis under key: {}",
-                                        updatedInventory.getInventoryId(),
-                                        updatedInventory.getProductId()))
+                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(), updatedInventory)
+                                .doOnSuccess(bool -> log.info("Cached Inventory ID: {} in Redis (key: {})",
+                                        updatedInventory.getInventoryId(), updatedInventory.getProductId()))
                                 .thenReturn(updatedInventory)
                 )
                 .flatMap(this::fetchProductAndBuildResponse)
-                .doOnSuccess(invResponse -> log.info(
-                        "Inventory reserved and cache refreshed for Product ID: {}",
+                .doOnSuccess(invResponse -> log.info("Inventory reserved and cache refreshed for Product ID: {}",
                         invResponse.getInventory().getProductId()))
                 .doOnError(e -> log.error("Error reserving inventory: ", e))
-                .doOnTerminate(
-                        () -> log.info("Exiting reserveInventory for Product ID: {}", productId));
+                .doOnTerminate(() -> log.info("Exiting reserveInventory for Product ID: {}", productId));
     }
+
 
     @Override
     @Transactional
@@ -567,114 +563,46 @@ public class InventoryServiceImpl implements InventoryService {
         List<OrderItemDTO> items = event.getItems();
         List<ReasonDetail> reasonDetails = new ArrayList<>();
 
+        // ---- PASS 1: Validate all items, collect errors if any ----
         return Flux.fromIterable(items)
-                .flatMap(item -> {
-                    UUID productId = item.getProductId();
-                    Integer requestedQty = item.getQuantity();
-
-                    return inventoryRepository.findByProductId(productId)
-                            .flatMap(inventory -> {
-                                if (inventory.getAvailableQuantity() <= 0) {
-                                    return fetchProductName(productId).map(name -> {
-                                        reasonDetails.add(
-                                                ReasonDetail.builder()
-                                                        .productId(productId)
-                                                        .productName(name)
-                                                        .message("No available inventory for this product.")
-                                                        .build()
-                                        );
-                                        return "";
-                                    });
-                                } else if (inventory.getAvailableQuantity() < requestedQty) {
-                                    return fetchProductName(productId).map(name -> {
-                                        reasonDetails.add(
-                                                ReasonDetail.builder()
-                                                        .productId(productId)
-                                                        .productName(name)
-                                                        .message(String.format(
-                                                                "Requested %d but only %d available.",
-                                                                requestedQty, inventory.getAvailableQuantity()
-                                                        ))
-                                                        .build()
-                                        );
-                                        return "";
-                                    });
-                                }
-                                // Otherwise, this product is fine; no error
-                                return Mono.just("");
-                            })
-                            .switchIfEmpty(
-                                    // If findByProductId returns Mono.empty(), we have no inventory record
-                                    fetchProductName(productId).map(name -> {
-                                        reasonDetails.add(
-                                                ReasonDetail.builder()
-                                                        .productId(productId)
-                                                        .productName(name)
-                                                        .message("No inventory record for this product.")
-                                                        .build()
-                                        );
-                                        return "";
-                                    })
-                            );
-                })
-                // After we've visited all items, we decide if we fail or succeed
+                .flatMap(item -> validateSingleItem(item, reasonDetails))
                 .then(Mono.defer(() -> {
                     if (!reasonDetails.isEmpty()) {
-                        // We found at least one product that cannot be reserved
+                        // Found at least one failing product => publish error, skip reservation
                         InventoryReserveFailedEvent failedEvent = InventoryReserveFailedEvent.builder()
                                 .eventType(EventType.INVENTORY_RESERVE_FAILED.name())
                                 .orderId(orderId)
                                 .reasons(reasonDetails)
                                 .timestamp(Instant.now())
                                 .build();
-
                         return eventProducer
                                 .publishEvent(EventType.INVENTORY_RESERVE_FAILED.getTopic(), failedEvent)
                                 .then();
                     }
 
-                    // Otherwise, proceed to update inventory for each product
+                    // ---- PASS 2: Everything is OK => update DB + build extended items ----
+                    List<ReservedItemEvent> extendedItems = new ArrayList<>();
+
                     return Flux.fromIterable(items)
-                            .flatMap(item -> {
-                                UUID productId = item.getProductId();
-                                Integer requestedQty = item.getQuantity();
-
-                                return inventoryRepository.findByProductId(productId)
-                                        .flatMap(inventory -> {
-                                            inventory.setAvailableQuantity(
-                                                    inventory.getAvailableQuantity() - requestedQty
-                                            );
-                                            inventory.setReservedQuantity(
-                                                    inventory.getReservedQuantity() + requestedQty
-                                            );
-                                            inventory.setLastUpdated(Instant.now());
-
-                                            return r2dbcEntityTemplate.update(Inventory.class)
-                                                    .matching(Query.query(Criteria.where("product_id").is(productId)))
-                                                    .apply(
-                                                            Update.update("available_quantity", inventory.getAvailableQuantity())
-                                                                    .set("reserved_quantity", inventory.getReservedQuantity())
-                                                                    .set("last_updated", inventory.getLastUpdated())
-                                                    )
-                                                    .thenReturn(inventory);
-                                        });
-                            })
+                            .flatMap(item -> reserveSingleItem(item, extendedItems))
                             .then(Mono.defer(() -> {
-                                // Build and publish a single InventoryReservedEvent
-                                List<OrderItemEvent> reservedItems = items.stream()
-                                        .map(i -> new OrderItemEvent(i.getProductId(), i.getQuantity()))
-                                        .toList();
+                                // Compute orderTotal from extendedItems
+                                double total = extendedItems.stream()
+                                        .mapToDouble(ReservedItemEvent::getTotalPrice)
+                                        .sum();
 
                                 InventoryReservedEvent reservedEvent = InventoryReservedEvent.builder()
                                         .eventType(EventType.INVENTORY_RESERVED.name())
                                         .orderId(orderId)
-                                        .items(reservedItems)
+                                        .items(extendedItems)        // with price info
+                                        .orderTotal(total)           // total for entire order
                                         .timestamp(Instant.now())
                                         .build();
 
-                                return eventProducer
-                                        .publishEvent(EventType.INVENTORY_RESERVED.getTopic(), reservedEvent)
-                                        .then();
+                                return eventProducer.publishEvent(
+                                        EventType.INVENTORY_RESERVED.getTopic(),
+                                        reservedEvent
+                                ).then();
                             }));
                 }))
                 .doOnSuccess(x -> log.info("Order {} processed successfully.", orderId))
@@ -682,18 +610,129 @@ public class InventoryServiceImpl implements InventoryService {
     }
 
     /**
-     * Helper method to fetch a product's name from the product-catalog service.
+     * Validate a single item:
+     *  - If there's no inventory record => reason "No inventory record"
+     *  - If availableQuantity = 0 => reason "No available inventory"
+     *  - If availableQuantity < requested => reason "Requested X but only Y available"
+     *  - Otherwise OK
+     * Appends errors to reasonDetails if any.
      */
-    private Mono<String> fetchProductName(UUID productId) {
+    private Mono<Void> validateSingleItem(OrderItemDTO item, List<ReasonDetail> reasonDetails) {
+        UUID productId = item.getProductId();
+        Integer requestedQty = item.getQuantity();
+
+        return inventoryRepository.findByProductId(productId)
+                .flatMap(inventory -> {
+                    if (inventory.getAvailableQuantity() <= 0) {
+                        return fetchProduct(productId).map(product -> {
+                            reasonDetails.add(
+                                    ReasonDetail.builder()
+                                            .productId(productId)
+                                            .productName(product.getName())
+                                            .message("No available inventory for this product.")
+                                            .build()
+                            );
+                            return "";
+                        });
+                    } else if (inventory.getAvailableQuantity() < requestedQty) {
+                        return fetchProduct(productId).map(product -> {
+                            reasonDetails.add(
+                                    ReasonDetail.builder()
+                                            .productId(productId)
+                                            .productName(product.getName())
+                                            .message(String.format(
+                                                    "Requested %d but only %d available.",
+                                                    requestedQty, inventory.getAvailableQuantity()
+                                            ))
+                                            .build()
+                            );
+                            return "";
+                        });
+                    }
+                    // If we reach here, it's valid => no error
+                    return Mono.just("");
+                })
+                .switchIfEmpty(
+                        // Means we have no Inventory record => reason
+                        fetchProduct(productId).map(product -> {
+                            reasonDetails.add(
+                                    ReasonDetail.builder()
+                                            .productId(productId)
+                                            .productName(product.getName())
+                                            .message("No inventory record for this product.")
+                                            .build()
+                            );
+                            return "";
+                        })
+                )
+                .then(); // Return Mono<Void>
+    }
+
+    /**
+     * Reserve a single item => update DB => build a ReservedItemEvent with product price
+     */
+    private Mono<Void> reserveSingleItem(OrderItemDTO item, List<ReservedItemEvent> extendedItems) {
+        UUID productId = item.getProductId();
+        Integer requestedQty = item.getQuantity();
+
+        // 1) Fetch inventory & product in parallel
+        Mono<Inventory> inventoryMono = inventoryRepository.findByProductId(productId);
+        Mono<Product> productMono = fetchProduct(productId);
+
+        return Mono.zip(inventoryMono, productMono)
+                .flatMap(tuple -> {
+                    Inventory inventory = tuple.getT1();
+                    Product product = tuple.getT2();
+
+                    // 2) Update inventory
+                    inventory.setAvailableQuantity(inventory.getAvailableQuantity() - requestedQty);
+                    inventory.setReservedQuantity(inventory.getReservedQuantity() + requestedQty);
+                    inventory.setLastUpdated(Instant.now());
+
+                    // 3) Build extended item with price info
+                    double unitPrice = (product.getPrice() != null)
+                            ? product.getPrice().doubleValue()
+                            : 0.0;
+                    double totalPrice = unitPrice * requestedQty;
+
+                    ReservedItemEvent reservedItem = ReservedItemEvent.builder()
+                            .productId(productId)
+                            .quantity(requestedQty)
+                            .unitPrice(unitPrice)
+                            .totalPrice(totalPrice)
+                            .build();
+
+                    // 4) Persist DB updates first
+                    return r2dbcEntityTemplate.update(Inventory.class)
+                            .matching(Query.query(Criteria.where("product_id").is(productId)))
+                            .apply(
+                                    Update.update("available_quantity", inventory.getAvailableQuantity())
+                                            .set("reserved_quantity", inventory.getReservedQuantity())
+                                            .set("last_updated", inventory.getLastUpdated())
+                            )
+                            .thenReturn(reservedItem);
+                })
+                .doOnNext(extendedItems::add)
+                .then();
+    }
+
+    /**
+     * Fetch the full Product details (including price) from product-catalog.
+     */
+    private Mono<Product> fetchProduct(UUID productId) {
         return productCatalogWebClient
                 .get()
                 .uri("/api/products/{productId}", productId)
                 .retrieve()
                 .bodyToMono(Product.class)
-                .map(Product::getName)
                 .onErrorResume(e -> {
-                    log.error("Error fetching product name for {}: {}", productId, e.getMessage());
-                    return Mono.just("Unknown Product");
+                    log.error("Error fetching product details for {}: {}", productId, e.getMessage());
+                    // Return a product with placeholder name/price
+                    Product fallback = Product.builder()
+                            .productId(productId)
+                            .name("Unknown Product")
+                            .build();
+                    return Mono.just(fallback);
                 });
     }
 
