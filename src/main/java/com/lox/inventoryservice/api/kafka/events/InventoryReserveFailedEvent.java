@@ -1,8 +1,7 @@
-// src/main/java/com/lox/inventoryservice/api/kafka/events/InventoryReserveFailedEvent.java
-
 package com.lox.inventoryservice.api.kafka.events;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.lox.inventoryservice.api.models.dto.ReasonDetail;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -11,11 +10,6 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * An event indicating that the inventory reserve operation failed for an order.
- * Instead of a single reason string, we store a list of ReasonDetail to produce structured JSON.
- * Now includes trackId for tracing or correlation.
- */
 @Data
 @Builder
 @NoArgsConstructor
@@ -33,10 +27,6 @@ public class InventoryReserveFailedEvent implements Event {
         return eventType;
     }
 
-    /**
-     * Use orderId to avoid null in the Kafka producer key.
-     * Fallback to a zero-UUID if orderId is null.
-     */
     @Override
     public UUID getProductId() {
         return (orderId != null)

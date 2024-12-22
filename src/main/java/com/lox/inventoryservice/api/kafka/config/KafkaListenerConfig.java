@@ -1,6 +1,6 @@
-package com.lox.inventoryservice.config;
+package com.lox.inventoryservice.api.kafka.config;
 
-import com.lox.inventoryservice.api.kafka.events.OrderCreatedEventDTO;
+import com.lox.inventoryservice.api.models.dto.OrderCreatedEventDTO;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.context.annotation.Bean;
@@ -42,7 +42,7 @@ public class KafkaListenerConfig {
 
         // Configure JsonDeserializer properties
         props.put(JsonDeserializer.TRUSTED_PACKAGES, "com.lox.inventoryservice.api.kafka.events");
-        props.put(JsonDeserializer.VALUE_DEFAULT_TYPE, "com.lox.inventoryservice.api.kafka.events.OrderCreatedEventDTO");
+        props.put(JsonDeserializer.VALUE_DEFAULT_TYPE, "com.lox.inventoryservice.api.models.dto.OrderCreatedEventDTO");
         props.put(JsonDeserializer.USE_TYPE_INFO_HEADERS, false);
 
         return new DefaultKafkaConsumerFactory<>(props);

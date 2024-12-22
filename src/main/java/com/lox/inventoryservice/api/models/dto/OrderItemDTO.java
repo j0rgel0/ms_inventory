@@ -1,4 +1,4 @@
-package com.lox.inventoryservice.api.kafka.events;
+package com.lox.inventoryservice.api.models.dto;
 
 import java.util.UUID;
 import lombok.Data;
@@ -10,4 +10,5 @@ public class OrderItemDTO {
     private UUID productId;
     private Integer quantity;
     private Double price;
+
 }

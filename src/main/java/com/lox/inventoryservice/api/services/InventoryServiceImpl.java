@@ -1,9 +1,8 @@
 package com.lox.inventoryservice.api.services;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lox.inventoryservice.api.exceptions.InsufficientStockException;
 import com.lox.inventoryservice.api.exceptions.InventoryNotFoundException;
+import com.lox.inventoryservice.api.kafka.events.Event;
 import com.lox.inventoryservice.api.kafka.events.EventType;
 import com.lox.inventoryservice.api.kafka.events.InventoryAddedEvent;
 import com.lox.inventoryservice.api.kafka.events.InventoryReleasedEvent;
@@ -11,13 +10,13 @@ import com.lox.inventoryservice.api.kafka.events.InventoryRemovedEvent;
 import com.lox.inventoryservice.api.kafka.events.InventoryReserveFailedEvent;
 import com.lox.inventoryservice.api.kafka.events.InventoryReservedEvent;
 import com.lox.inventoryservice.api.kafka.events.InventoryUpdatedEvent;
-import com.lox.inventoryservice.api.kafka.events.OrderCreatedEventDTO;
-import com.lox.inventoryservice.api.kafka.events.OrderItemDTO;
-import com.lox.inventoryservice.api.kafka.events.OrderItemEvent;
-import com.lox.inventoryservice.api.kafka.events.ReasonDetail;
-import com.lox.inventoryservice.api.kafka.events.ReservedItemEvent;
+import com.lox.inventoryservice.api.kafka.topics.KafkaTopics;
 import com.lox.inventoryservice.api.models.Inventory;
 import com.lox.inventoryservice.api.models.Product;
+import com.lox.inventoryservice.api.models.dto.OrderCreatedEventDTO;
+import com.lox.inventoryservice.api.models.dto.OrderItemDTO;
+import com.lox.inventoryservice.api.models.dto.ReasonDetail;
+import com.lox.inventoryservice.api.models.dto.ReservedItemEvent;
 import com.lox.inventoryservice.api.models.page.InventoryPage;
 import com.lox.inventoryservice.api.models.responses.InventoryResponse;
 import com.lox.inventoryservice.api.repositories.r2dbc.InventoryRepository;
@@ -30,8 +29,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import lombok.AllArgsConstructor;
-import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Pageable;
@@ -59,7 +56,6 @@ public class InventoryServiceImpl implements InventoryService {
     private final R2dbcEntityTemplate r2dbcEntityTemplate;
     private final WebClient productCatalogWebClient;
     private ReactiveHashOperations<String, String, Inventory> hashOps;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String HASH_KEY = "inventoryCache";
 
@@ -77,6 +73,25 @@ public class InventoryServiceImpl implements InventoryService {
                 .doOnError(
                         error -> log.error("Failed to flush Redis cache: {}", error.getMessage()))
                 .subscribe();
+    }
+
+    /**
+     * Helper method to publish events to both INVENTORY_STATUS_EVENTS_TOPIC and
+     * NOTIFICATIONS_EVENTS_TOPIC.
+     *
+     * @param event     The event object to be published.
+     * @param eventName A descriptive name of the event for logging purposes.
+     * @return A Mono that completes when both publications are done.
+     */
+    private Mono<Void> publishToBothTopics(Event event, String eventName) {
+        return Mono.when(
+                eventProducer.publishEvent(KafkaTopics.INVENTORY_STATUS_EVENTS_TOPIC, event)
+                        .doOnSuccess(aVoid -> log.info("Published {} event to topic '{}'",
+                                eventName, KafkaTopics.INVENTORY_STATUS_EVENTS_TOPIC)),
+                eventProducer.publishEvent(KafkaTopics.NOTIFICATIONS_EVENTS_TOPIC, event)
+                        .doOnSuccess(aVoid -> log.info("Published {} event to topic '{}'",
+                                eventName, KafkaTopics.NOTIFICATIONS_EVENTS_TOPIC))
+        ).then();
     }
 
     @Override
@@ -105,7 +120,7 @@ public class InventoryServiceImpl implements InventoryService {
                 .flatMap(existingInventory -> {
                     log.warn("Inventory already exists for Product ID: {}. Skipping creation.",
                             productId);
-                    // Especificar <InventoryResponse> en Mono.error para mantener el tipo
+                    // Specify <InventoryResponse> in Mono.error to maintain the type
                     return Mono.<InventoryResponse>error(new IllegalStateException(
                             "Inventory already exists for Product ID: " + productId));
                 })
@@ -131,17 +146,12 @@ public class InventoryServiceImpl implements InventoryService {
                                             .doOnSuccess(savedInventory -> log.info(
                                                     "Inventory inserted successfully: {}",
                                                     savedInventory))
-                                            .flatMap(savedInventory ->
-                                                    eventProducer.publishEvent(
-                                                                    EventType.INVENTORY_ADDED.getTopic(),
-                                                                    InventoryAddedEvent.fromInventory(
-                                                                            savedInventory))
-                                                            .doOnSuccess(aVoid -> log.info(
-                                                                    "Published INVENTORY_ADDED event for Inventory ID: {}",
-                                                                    savedInventory.getInventoryId()))
-                                                            // Retornamos el objeto Inventory al siguiente operador
-                                                            .thenReturn(savedInventory)
-                                            )
+                                            .flatMap(savedInventory -> {
+                                                InventoryAddedEvent event = InventoryAddedEvent.fromInventory(
+                                                        savedInventory);
+                                                return publishToBothTopics(event, "INVENTORY_ADDED")
+                                                        .thenReturn(savedInventory);
+                                            })
                                             .flatMap(savedInventory ->
                                                     hashOps.put(HASH_KEY,
                                                                     savedInventory.getProductId()
@@ -150,10 +160,10 @@ public class InventoryServiceImpl implements InventoryService {
                                                                     "Cached Inventory ID: {} in Redis under key: {}",
                                                                     savedInventory.getInventoryId(),
                                                                     savedInventory.getProductId()))
-                                                            // Retornamos el objeto Inventory al siguiente operador
+                                                            // Return the Inventory object to the next operator
                                                             .thenReturn(savedInventory)
                                             )
-                                            // Transformamos Inventory en InventoryResponse
+                                            // Transform Inventory into InventoryResponse
                                             .flatMap(this::fetchProductAndBuildResponse)
                                             .doOnSuccess(invResponse -> log.info(
                                                     "Inventory created and cached for Product ID: {}",
@@ -163,7 +173,7 @@ public class InventoryServiceImpl implements InventoryService {
                                                             e.getMessage()));
                                 })
                 )
-                // Especificar <InventoryResponse> en onErrorResume para que el compilador mantenga el tipo
+                // Specify <InventoryResponse> in onErrorResume to maintain the type
                 .onErrorResume(e -> {
                     log.error("Product not found or error occurred: {}", e.getMessage());
                     return Mono.<InventoryResponse>error(
@@ -254,14 +264,12 @@ public class InventoryServiceImpl implements InventoryService {
                                     "Database update completed for Product ID: {}", productId))
                             .thenReturn(existingInventory);
                 })
-                .flatMap(updatedInventory ->
-                        eventProducer.publishEvent(EventType.INVENTORY_UPDATED.getTopic(),
-                                        InventoryUpdatedEvent.fromInventory(updatedInventory))
-                                .doOnSuccess(aVoid -> log.info(
-                                        "Published INVENTORY_UPDATED event for Inventory ID: {}",
-                                        updatedInventory.getInventoryId()))
-                                .thenReturn(updatedInventory)
-                )
+                .flatMap(updatedInventory -> {
+                    InventoryUpdatedEvent event = InventoryUpdatedEvent.fromInventory(
+                            updatedInventory);
+                    return publishToBothTopics(event, "INVENTORY_UPDATED")
+                            .thenReturn(updatedInventory);
+                })
                 .flatMap(updatedInventory ->
                         hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
                                         updatedInventory)
@@ -305,19 +313,14 @@ public class InventoryServiceImpl implements InventoryService {
                                 .doOnSuccess(deletedCount -> log.info(
                                         "Deleted {} records from database for Product ID: {}",
                                         deletedCount, productId))
-                                .then(eventProducer.publishEvent(
-                                                EventType.INVENTORY_REMOVED.getTopic(),
-                                                InventoryRemovedEvent.fromProductId(productId))
-                                        .doOnSuccess(aVoid -> log.info(
-                                                "Published INVENTORY_REMOVED event for Product ID: {}",
-                                                productId))
-                                )
+                                .then(publishToBothTopics(
+                                        InventoryRemovedEvent.fromProductId(productId),
+                                        "INVENTORY_REMOVED"))
                                 .then(hashOps.remove(HASH_KEY, key)
                                         .doOnSuccess(aBoolean -> log.info(
                                                 "Removed Inventory from Redis cache for Product ID: {}",
                                                 productId))
-                                )
-                )
+                                ))
                 .then()
                 .doOnSuccess(v -> log.info("Inventory deleted and cache removed for Product ID: {}",
                         productId))
@@ -400,7 +403,8 @@ public class InventoryServiceImpl implements InventoryService {
     @Retry(name = "inventoryServiceRetry", fallbackMethod = "fallbackReserveInventory")
     @RateLimiter(name = "inventoryServiceRateLimiter", fallbackMethod = "fallbackReserveInventory")
     public Mono<InventoryResponse> reserveInventory(UUID productId, Integer quantity) {
-        log.info("Entered reserveInventory for Product ID: {} with Quantity: {}", productId, quantity);
+        log.info("Entered reserveInventory for Product ID: {} with Quantity: {}", productId,
+                quantity);
 
         return inventoryRepository.findByProductId(productId)
                 .doOnSubscribe(subscription -> log.info(
@@ -409,9 +413,11 @@ public class InventoryServiceImpl implements InventoryService {
                         "Inventory not found for Product ID: " + productId)))
                 .flatMap(inventory -> {
                     if (inventory.getAvailableQuantity() < quantity) {
-                        log.warn("Insufficient stock for Product ID: {}. Available: {}, Requested: {}",
+                        log.warn(
+                                "Insufficient stock for Product ID: {}. Available: {}, Requested: {}",
                                 productId, inventory.getAvailableQuantity(), quantity);
-                        return Mono.error(new InsufficientStockException("Insufficient stock available."));
+                        return Mono.error(
+                                new InsufficientStockException("Insufficient stock available."));
                     }
 
                     inventory.setAvailableQuantity(inventory.getAvailableQuantity() - quantity);
@@ -421,40 +427,46 @@ public class InventoryServiceImpl implements InventoryService {
 
                     return r2dbcEntityTemplate.update(Inventory.class)
                             .matching(Query.query(Criteria.where("product_id").is(productId)))
-                            .apply(Update.update("available_quantity", inventory.getAvailableQuantity())
+                            .apply(Update.update("available_quantity",
+                                            inventory.getAvailableQuantity())
                                     .set("reserved_quantity", inventory.getReservedQuantity())
                                     .set("last_updated", inventory.getLastUpdated()))
-                            .doOnSubscribe(sub -> log.info("Updating Inventory in DB for reservation (Product ID: {})", productId))
-                            .doOnSuccess(rows -> log.info("DB update completed for reservation (Product ID: {})", productId))
+                            .doOnSubscribe(sub -> log.info(
+                                    "Updating Inventory in DB for reservation (Product ID: {})",
+                                    productId))
+                            .doOnSuccess(rows -> log.info(
+                                    "DB update completed for reservation (Product ID: {})",
+                                    productId))
                             .thenReturn(inventory);
                 })
                 .flatMap(updatedInventory -> {
                     InventoryReservedEvent event = InventoryReservedEvent.builder()
                             .eventType(EventType.INVENTORY_RESERVED.name())
                             .orderId(null)  // or pass an actual orderId if you have it
-                            .items(List.of())  // or whatever items you need
+                            .items(List.of())  // or populate with actual items as needed
                             .timestamp(Instant.now())
                             .build();
 
-                    return eventProducer.publishEvent(EventType.INVENTORY_RESERVED.getTopic(), event)
-                            .then(Mono.defer(() -> {
-                                log.info("Published INVENTORY_RESERVED event for Inventory ID: {}",
-                                        updatedInventory.getInventoryId());
-                                return Mono.just(updatedInventory);
-                            }));
+                    return publishToBothTopics(event, "INVENTORY_RESERVED")
+                            .thenReturn(updatedInventory);
                 })
 
                 .flatMap(updatedInventory ->
-                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(), updatedInventory)
-                                .doOnSuccess(bool -> log.info("Cached Inventory ID: {} in Redis (key: {})",
-                                        updatedInventory.getInventoryId(), updatedInventory.getProductId()))
+                        hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
+                                        updatedInventory)
+                                .doOnSuccess(bool -> log.info(
+                                        "Cached Inventory ID: {} in Redis (key: {})",
+                                        updatedInventory.getInventoryId(),
+                                        updatedInventory.getProductId()))
                                 .thenReturn(updatedInventory)
                 )
                 .flatMap(this::fetchProductAndBuildResponse)
-                .doOnSuccess(invResponse -> log.info("Inventory reserved and cache refreshed for Product ID: {}",
+                .doOnSuccess(invResponse -> log.info(
+                        "Inventory reserved and cache refreshed for Product ID: {}",
                         invResponse.getInventory().getProductId()))
                 .doOnError(e -> log.error("Error reserving inventory: ", e))
-                .doOnTerminate(() -> log.info("Exiting reserveInventory for Product ID: {}", productId));
+                .doOnTerminate(
+                        () -> log.info("Exiting reserveInventory for Product ID: {}", productId));
     }
 
 
@@ -501,14 +513,12 @@ public class InventoryServiceImpl implements InventoryService {
                                     productId))
                             .thenReturn(inventory);
                 })
-                .flatMap(updatedInventory ->
-                        eventProducer.publishEvent(EventType.INVENTORY_RELEASED.getTopic(),
-                                        InventoryReleasedEvent.fromInventory(updatedInventory))
-                                .doOnSuccess(aVoid -> log.info(
-                                        "Published INVENTORY_RELEASED event for Inventory ID: {}",
-                                        updatedInventory.getInventoryId()))
-                                .thenReturn(updatedInventory)
-                )
+                .flatMap(updatedInventory -> {
+                    InventoryReleasedEvent event = InventoryReleasedEvent.fromInventory(
+                            updatedInventory);
+                    return publishToBothTopics(event, "INVENTORY_RELEASED")
+                            .thenReturn(updatedInventory);
+                })
                 .flatMap(updatedInventory ->
                         hashOps.put(HASH_KEY, updatedInventory.getProductId().toString(),
                                         updatedInventory)
@@ -549,10 +559,9 @@ public class InventoryServiceImpl implements InventoryService {
     }
 
 
-
     @KafkaListener(
-            topics = "order.events",
-            groupId = "inventory-service-group",
+            topics = "inventory.commands",
+            groupId = "order-service-group",
             containerFactory = "kafkaListenerContainerFactory"
     )
     @Transactional
@@ -577,9 +586,8 @@ public class InventoryServiceImpl implements InventoryService {
                                 .reasons(reasonDetails)
                                 .timestamp(Instant.now())
                                 .build();
-                        return eventProducer
-                                .publishEvent(EventType.INVENTORY_RESERVE_FAILED.getTopic(), failedEvent)
-                                .then();
+                        // Publish to both topics
+                        return publishToBothTopics(failedEvent, "INVENTORY_RESERVE_FAILED").then();
                     }
 
                     // ---- PASS 2: Everything is OK => update DB + build extended items ----
@@ -601,23 +609,21 @@ public class InventoryServiceImpl implements InventoryService {
                                         .timestamp(Instant.now())
                                         .build();
 
-                                return eventProducer.publishEvent(
-                                        EventType.INVENTORY_RESERVED.getTopic(),
-                                        reservedEvent
-                                ).then();
+                                // Publish to both topics
+                                return publishToBothTopics(reservedEvent,
+                                        "INVENTORY_RESERVED").then();
                             }));
                 }))
                 .doOnSuccess(x -> log.info("Order {} processed successfully.", orderId))
-                .doOnError(e -> log.error("Error processing order {}: {}", orderId, e.getMessage()));
+                .doOnError(
+                        e -> log.error("Error processing order {}: {}", orderId, e.getMessage()));
     }
 
     /**
-     * Validate a single item:
-     *  - If there's no inventory record => reason "No inventory record"
-     *  - If availableQuantity = 0 => reason "No available inventory"
-     *  - If availableQuantity < requested => reason "Requested X but only Y available"
-     *  - Otherwise OK
-     * Appends errors to reasonDetails if any.
+     * Validate a single item: - If there's no inventory record => reason "No inventory record" - If
+     * availableQuantity = 0 => reason "No available inventory" - If availableQuantity < requested
+     * => reason "Requested X but only Y available" - Otherwise OK Appends errors to reasonDetails
+     * if any.
      */
     private Mono<Void> validateSingleItem(OrderItemDTO item, List<ReasonDetail> reasonDetails) {
         UUID productId = item.getProductId();
@@ -708,8 +714,10 @@ public class InventoryServiceImpl implements InventoryService {
                     return r2dbcEntityTemplate.update(Inventory.class)
                             .matching(Query.query(Criteria.where("product_id").is(productId)))
                             .apply(
-                                    Update.update("available_quantity", inventory.getAvailableQuantity())
-                                            .set("reserved_quantity", inventory.getReservedQuantity())
+                                    Update.update("available_quantity",
+                                                    inventory.getAvailableQuantity())
+                                            .set("reserved_quantity",
+                                                    inventory.getReservedQuantity())
                                             .set("last_updated", inventory.getLastUpdated())
                             )
                             .thenReturn(reservedItem);
@@ -728,7 +736,8 @@ public class InventoryServiceImpl implements InventoryService {
                 .retrieve()
                 .bodyToMono(Product.class)
                 .onErrorResume(e -> {
-                    log.error("Error fetching product details for {}: {}", productId, e.getMessage());
+                    log.error("Error fetching product details for {}: {}", productId,
+                            e.getMessage());
                     // Return a product with placeholder name/price
                     Product fallback = Product.builder()
                             .productId(productId)
@@ -738,6 +747,7 @@ public class InventoryServiceImpl implements InventoryService {
                 });
     }
 
+    // Fallback Methods
 
     public Mono<InventoryResponse> fallbackCreateInventory(Inventory inventory,
             Throwable throwable) {

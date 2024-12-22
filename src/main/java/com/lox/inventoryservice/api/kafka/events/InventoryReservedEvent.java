@@ -1,8 +1,7 @@
-// src/main/java/com/lox/inventoryservice/api/kafka/events/InventoryReservedEvent.java
-
 package com.lox.inventoryservice.api.kafka.events;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.lox.inventoryservice.api.models.dto.ReservedItemEvent;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -11,11 +10,6 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * An event indicating the inventory was successfully reserved for an order.
- * Includes a list of reserved items (with prices), the total for the entire order,
- * and trackId for correlation/logging/tracing.
- */
 @Data
 @Builder
 @NoArgsConstructor

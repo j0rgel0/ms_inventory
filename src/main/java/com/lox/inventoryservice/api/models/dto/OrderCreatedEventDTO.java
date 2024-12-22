@@ -1,6 +1,6 @@
 // src/main/java/com/lox/inventoryservice/api/kafka/events/OrderCreatedEventDTO.java
 
-package com.lox.inventoryservice.api.kafka.events;
+package com.lox.inventoryservice.api.models.dto;
 
 import java.time.Instant;
 import java.util.List;
@@ -9,6 +9,7 @@ import lombok.Data;
 
 @Data
 public class OrderCreatedEventDTO {
+
     private String eventType;
     private UUID trackId;      // New field
     private UUID orderId;
@@ -19,4 +20,5 @@ public class OrderCreatedEventDTO {
     private Instant createdAt;
     private Instant updatedAt;
     private List<OrderItemDTO> items; // Contains productId, quantity, etc.
+
 }

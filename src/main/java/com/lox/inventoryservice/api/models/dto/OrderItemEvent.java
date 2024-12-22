@@ -1,4 +1,4 @@
-package com.lox.inventoryservice.api.kafka.events;
+package com.lox.inventoryservice.api.models.dto;
 
 import java.util.UUID;
 import lombok.AllArgsConstructor;

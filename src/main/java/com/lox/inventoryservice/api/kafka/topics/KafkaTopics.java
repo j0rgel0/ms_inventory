@@ -12,24 +12,19 @@ import org.springframework.context.annotation.Configuration;
 @RequiredArgsConstructor
 public class KafkaTopics {
 
-    public static final String INVENTORY_EVENTS_TOPIC = "inventory.events";
-    public static final String INVENTORY_RELEASE_EVENTS_TOPIC = "inventory.release.events";
-    public static final String ORDER_EVENTS_TOPIC = "order.events";
+    public static final String INVENTORY_STATUS_EVENTS_TOPIC = "inventory.status.events";
+    public static final String NOTIFICATIONS_EVENTS_TOPIC = "notification.events";
 
     private final KafkaConfig kafkaConfig;
 
     @Bean
-    public NewTopic inventoryEventsTopic() {
-        return new NewTopic("inventory.events", 3, (short) 1);
+    public NewTopic inventoryStatusEventsTopic() {
+        return new NewTopic(INVENTORY_STATUS_EVENTS_TOPIC, 3, (short) 1);
     }
 
     @Bean
-    public NewTopic inventoryReleaseEventsTopic() {
-        return new NewTopic("inventory.release.events", 3, (short) 1);
+    public NewTopic notificationEventsTopic() {
+        return new NewTopic(NOTIFICATIONS_EVENTS_TOPIC, 3, (short) 1);
     }
 
-    @Bean
-    public NewTopic orderEventsTopic() {
-        return new NewTopic("order.events", 3, (short) 1);
-    }
 }
