@@ -4,6 +4,7 @@ import com.lox.inventoryservice.api.models.Inventory;
 import java.util.UUID;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.stereotype.Repository;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Repository
@@ -11,6 +12,7 @@ public interface InventoryRepository extends ReactiveCrudRepository<Inventory, U
         InventoryRepositoryCustom {
 
     Mono<Inventory> findByProductId(UUID productId);
+    Flux<Inventory> findAllByReorderNeeded(Boolean reorderNeeded);
 
     Mono<Void> deleteByProductId(UUID productId);
 }

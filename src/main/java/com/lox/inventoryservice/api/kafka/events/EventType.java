@@ -9,12 +9,13 @@ public enum EventType {
     INVENTORY_UPDATED(KafkaTopics.INVENTORY_EVENTS_TOPIC),
     INVENTORY_REMOVED(KafkaTopics.INVENTORY_EVENTS_TOPIC),
     INVENTORY_RESERVED(KafkaTopics.INVENTORY_EVENTS_TOPIC),
-    INVENTORY_RELEASED(KafkaTopics.INVENTORY_EVENTS_TOPIC);
+    INVENTORY_RELEASED(KafkaTopics.INVENTORY_EVENTS_TOPIC),
+    INVENTORY_RESERVE_FAILED(KafkaTopics.INVENTORY_RELEASE_EVENTS_TOPIC),
+    ORDER_CREATED(KafkaTopics.ORDER_EVENTS_TOPIC);
 
     private final String topic;
 
     EventType(String topic) {
         this.topic = topic;
     }
-
 }
