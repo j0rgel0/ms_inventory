@@ -557,6 +557,7 @@ public class InventoryServiceImpl implements InventoryService {
     )
     @Transactional
     public Mono<Void> handleOrderCreatedEvent(OrderCreatedEventDTO event) {
+        UUID trackId = event.getTrackId();
         UUID orderId = event.getOrderId();
         log.info("Received OrderCreatedEvent for Order ID: {}", orderId);
 
@@ -571,6 +572,7 @@ public class InventoryServiceImpl implements InventoryService {
                         // Found at least one failing product => publish error, skip reservation
                         InventoryReserveFailedEvent failedEvent = InventoryReserveFailedEvent.builder()
                                 .eventType(EventType.INVENTORY_RESERVE_FAILED.name())
+                                .trackId(trackId)
                                 .orderId(orderId)
                                 .reasons(reasonDetails)
                                 .timestamp(Instant.now())
@@ -590,9 +592,9 @@ public class InventoryServiceImpl implements InventoryService {
                                 double total = extendedItems.stream()
                                         .mapToDouble(ReservedItemEvent::getTotalPrice)
                                         .sum();
-
                                 InventoryReservedEvent reservedEvent = InventoryReservedEvent.builder()
                                         .eventType(EventType.INVENTORY_RESERVED.name())
+                                        .trackId(trackId)
                                         .orderId(orderId)
                                         .items(extendedItems)        // with price info
                                         .orderTotal(total)           // total for entire order

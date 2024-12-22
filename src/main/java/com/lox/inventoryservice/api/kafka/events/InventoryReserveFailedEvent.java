@@ -13,8 +13,8 @@ import lombok.NoArgsConstructor;
 
 /**
  * An event indicating that the inventory reserve operation failed for an order.
- * Instead of a single string 'reason', we store a list of ReasonDetail to
- * produce structured JSON output. Includes a static builder method for convenience.
+ * Instead of a single reason string, we store a list of ReasonDetail to produce structured JSON.
+ * Now includes trackId for tracing or correlation.
  */
 @Data
 @Builder
@@ -23,21 +23,18 @@ import lombok.NoArgsConstructor;
 public class InventoryReserveFailedEvent implements Event {
 
     private String eventType;
+    private UUID trackId;
     private UUID orderId;
     private List<ReasonDetail> reasons;
     private Instant timestamp;
 
-    /**
-     * Returns the event type (e.g., "INVENTORY_RESERVE_FAILED").
-     */
     @Override
     public String getEventType() {
         return eventType;
     }
 
     /**
-     * Use orderId to avoid null productId in the publishEvent(...) method,
-     * since the producer uses getProductId().toString() as the Kafka key.
+     * Use orderId to avoid null in the Kafka producer key.
      * Fallback to a zero-UUID if orderId is null.
      */
     @Override
@@ -47,9 +44,6 @@ public class InventoryReserveFailedEvent implements Event {
                 : UUID.fromString("00000000-0000-0000-0000-000000000000");
     }
 
-    /**
-     * ISO 8601 UTC timestamp.
-     */
     @Override
     @JsonFormat(
             shape = JsonFormat.Shape.STRING,
@@ -58,20 +52,5 @@ public class InventoryReserveFailedEvent implements Event {
     )
     public Instant getTimestamp() {
         return timestamp;
-    }
-
-    /**
-     * Convenience static builder to create a failed event with the current timestamp.
-     */
-    public static InventoryReserveFailedEvent fromOrder(
-            UUID orderId,
-            List<ReasonDetail> reasons
-    ) {
-        return InventoryReserveFailedEvent.builder()
-                .eventType(EventType.INVENTORY_RESERVE_FAILED.name())
-                .orderId(orderId)
-                .reasons(reasons)
-                .timestamp(Instant.now())
-                .build();
     }
 }

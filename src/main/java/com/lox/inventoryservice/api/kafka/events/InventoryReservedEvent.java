@@ -1,3 +1,5 @@
+// src/main/java/com/lox/inventoryservice/api/kafka/events/InventoryReservedEvent.java
+
 package com.lox.inventoryservice.api.kafka.events;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
@@ -10,8 +12,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * Now includes a list of ReservedItemEvent (with unit price, totalPrice, etc.)
- * and an overall orderTotal for all items.
+ * An event indicating the inventory was successfully reserved for an order.
+ * Includes a list of reserved items (with prices), the total for the entire order,
+ * and trackId for correlation/logging/tracing.
  */
 @Data
 @Builder
@@ -20,6 +23,7 @@ import lombok.NoArgsConstructor;
 public class InventoryReservedEvent implements Event {
 
     private String eventType;
+    private UUID trackId;
     private UUID orderId;
     private List<ReservedItemEvent> items;
     private Double orderTotal;
@@ -32,7 +36,7 @@ public class InventoryReservedEvent implements Event {
 
     @Override
     public UUID getProductId() {
-        // Use orderId to avoid null; the producer uses event.getProductId().toString() as key
+        // Use orderId if present to avoid NullPointerException in the producer’s key
         return (orderId != null)
                 ? orderId
                 : UUID.fromString("00000000-0000-0000-0000-000000000000");
