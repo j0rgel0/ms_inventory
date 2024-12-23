@@ -40,7 +40,7 @@ public class InventoryReleasedEvent implements Event {
     // Static method to build the event from an Inventory
     public static InventoryReleasedEvent fromInventory(Inventory inventory) {
         return InventoryReleasedEvent.builder()
-                .eventType(EventType.INVENTORY_RELEASED.name())
+                .eventType(EventType.INVENTORY_RELEASED_NOTIFICATION.name())
                 .inventoryId(inventory.getInventoryId())
                 .productId(inventory.getProductId())
                 .releasedQuantity(inventory.getReservedQuantity())
@@ -48,12 +48,4 @@ public class InventoryReleasedEvent implements Event {
                 .build();
     }
 
-    // Overloaded method to create event with only productId
-    public static InventoryReleasedEvent fromProductId(UUID productId) {
-        return InventoryReleasedEvent.builder()
-                .eventType(EventType.INVENTORY_RELEASED.name())
-                .productId(productId)
-                .timestamp(Instant.now())
-                .build();
-    }
 }

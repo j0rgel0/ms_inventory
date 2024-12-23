@@ -1,5 +1,9 @@
 package com.lox.inventoryservice.api.services;
 
+import static com.lox.inventoryservice.api.kafka.events.EventType.INVENTORY_RESERVED_NOTIFICATION;
+import static com.lox.inventoryservice.api.kafka.events.EventType.INVENTORY_RESERVED_STATUS;
+import static com.lox.inventoryservice.api.kafka.events.EventType.INVENTORY_RESERVE_FAILED_NOTIFICATION;
+
 import com.lox.inventoryservice.api.exceptions.InsufficientStockException;
 import com.lox.inventoryservice.api.exceptions.InventoryNotFoundException;
 import com.lox.inventoryservice.api.kafka.events.Event;
@@ -84,14 +88,10 @@ public class InventoryServiceImpl implements InventoryService {
      * @return A Mono that completes when both publications are done.
      */
     private Mono<Void> publishToBothTopics(Event event, String eventName) {
-        return Mono.when(
-                eventProducer.publishEvent(KafkaTopics.INVENTORY_STATUS_EVENTS_TOPIC, event)
-                        .doOnSuccess(aVoid -> log.info("Published {} event to topic '{}'",
-                                eventName, KafkaTopics.INVENTORY_STATUS_EVENTS_TOPIC)),
-                eventProducer.publishEvent(KafkaTopics.NOTIFICATIONS_EVENTS_TOPIC, event)
-                        .doOnSuccess(aVoid -> log.info("Published {} event to topic '{}'",
-                                eventName, KafkaTopics.NOTIFICATIONS_EVENTS_TOPIC))
-        ).then();
+        // Dejarlo vacío para que no publique nada:
+        // O, si quieres, podrías poner un log o algo mínimo:
+        log.info("publishToBothTopics llamado, pero sin publicar a Kafka. Evento: {}", eventName);
+        return Mono.empty();
     }
 
     @Override
@@ -441,13 +441,13 @@ public class InventoryServiceImpl implements InventoryService {
                 })
                 .flatMap(updatedInventory -> {
                     InventoryReservedEvent event = InventoryReservedEvent.builder()
-                            .eventType(EventType.INVENTORY_RESERVED.name())
+                            .eventType(INVENTORY_RESERVED_NOTIFICATION.name())
                             .orderId(null)  // or pass an actual orderId if you have it
                             .items(List.of())  // or populate with actual items as needed
                             .timestamp(Instant.now())
                             .build();
 
-                    return publishToBothTopics(event, "INVENTORY_RESERVED")
+                    return publishToBothTopics(event, INVENTORY_RESERVED_NOTIFICATION.name())
                             .thenReturn(updatedInventory);
                 })
 
@@ -558,12 +558,7 @@ public class InventoryServiceImpl implements InventoryService {
                 });
     }
 
-
-    @KafkaListener(
-            topics = "inventory.commands",
-            groupId = "order-service-group",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = "inventory.commands", groupId = "inventory-service-group")
     @Transactional
     public Mono<Void> handleOrderCreatedEvent(OrderCreatedEventDTO event) {
         UUID trackId = event.getTrackId();
@@ -580,14 +575,14 @@ public class InventoryServiceImpl implements InventoryService {
                     if (!reasonDetails.isEmpty()) {
                         // Found at least one failing product => publish error, skip reservation
                         InventoryReserveFailedEvent failedEvent = InventoryReserveFailedEvent.builder()
-                                .eventType(EventType.INVENTORY_RESERVE_FAILED.name())
+                                .eventType(INVENTORY_RESERVE_FAILED_NOTIFICATION.name())
                                 .trackId(trackId)
                                 .orderId(orderId)
                                 .reasons(reasonDetails)
                                 .timestamp(Instant.now())
                                 .build();
                         // Publish to both topics
-                        return publishToBothTopics(failedEvent, "INVENTORY_RESERVE_FAILED").then();
+                        return publishToBothTopics(failedEvent, INVENTORY_RESERVE_FAILED_NOTIFICATION.name()).then();
                     }
 
                     // ---- PASS 2: Everything is OK => update DB + build extended items ----
@@ -601,7 +596,7 @@ public class InventoryServiceImpl implements InventoryService {
                                         .mapToDouble(ReservedItemEvent::getTotalPrice)
                                         .sum();
                                 InventoryReservedEvent reservedEvent = InventoryReservedEvent.builder()
-                                        .eventType(EventType.INVENTORY_RESERVED.name())
+                                        .eventType(INVENTORY_RESERVED_STATUS.name())
                                         .trackId(trackId)
                                         .orderId(orderId)
                                         .items(extendedItems)        // with price info
@@ -611,7 +606,7 @@ public class InventoryServiceImpl implements InventoryService {
 
                                 // Publish to both topics
                                 return publishToBothTopics(reservedEvent,
-                                        "INVENTORY_RESERVED").then();
+                                        INVENTORY_RESERVED_STATUS.name()).then();
                             }));
                 }))
                 .doOnSuccess(x -> log.info("Order {} processed successfully.", orderId))

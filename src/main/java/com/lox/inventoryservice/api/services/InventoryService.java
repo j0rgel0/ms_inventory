@@ -23,4 +23,5 @@ public interface InventoryService {
     Mono<Void> deleteInventory(UUID productId);
 
     Mono<InventoryPage> listInventory(List<String> filters, Pageable pageable);
+
 }

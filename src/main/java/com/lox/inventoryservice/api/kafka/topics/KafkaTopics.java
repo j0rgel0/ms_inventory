@@ -14,6 +14,7 @@ public class KafkaTopics {
 
     public static final String INVENTORY_STATUS_EVENTS_TOPIC = "inventory.status.events";
     public static final String NOTIFICATIONS_EVENTS_TOPIC = "notification.events";
+    public static final String INVENTORY_COMMANDS_TOPIC = "inventory.commands";
 
     private final KafkaConfig kafkaConfig;
 
@@ -26,5 +27,8 @@ public class KafkaTopics {
     public NewTopic notificationEventsTopic() {
         return new NewTopic(NOTIFICATIONS_EVENTS_TOPIC, 3, (short) 1);
     }
-
+    @Bean
+    public NewTopic inventoryCommandsTopic() {
+        return new NewTopic(INVENTORY_COMMANDS_TOPIC, 3, (short) 1);
+    }
 }
