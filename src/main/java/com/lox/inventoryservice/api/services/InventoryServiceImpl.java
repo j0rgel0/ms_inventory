@@ -88,10 +88,14 @@ public class InventoryServiceImpl implements InventoryService {
      * @return A Mono that completes when both publications are done.
      */
     private Mono<Void> publishToBothTopics(Event event, String eventName) {
-        // Dejarlo vacío para que no publique nada:
-        // O, si quieres, podrías poner un log o algo mínimo:
-        log.info("publishToBothTopics llamado, pero sin publicar a Kafka. Evento: {}", eventName);
-        return Mono.empty();
+        return Mono.when(
+                eventProducer.publishEvent(KafkaTopics.INVENTORY_STATUS_EVENTS_TOPIC, event)
+                        .doOnSuccess(aVoid -> log.info("Published {} event to topic '{}'",
+                                eventName, KafkaTopics.INVENTORY_STATUS_EVENTS_TOPIC))
+//                eventProducer.publishEvent(KafkaTopics.NOTIFICATIONS_EVENTS_TOPIC, event)
+//                        .doOnSuccess(aVoid -> log.info("Published {} event to topic '{}'",
+//                                eventName, KafkaTopics.NOTIFICATIONS_EVENTS_TOPIC))
+        ).then();
     }
 
     @Override
@@ -558,7 +562,7 @@ public class InventoryServiceImpl implements InventoryService {
                 });
     }
 
-    @KafkaListener(topics = "inventory.commands", groupId = "inventory-service-group")
+    @KafkaListener(topics = "inventory.commands", groupId = "order-service-group")
     @Transactional
     public Mono<Void> handleOrderCreatedEvent(OrderCreatedEventDTO event) {
         UUID trackId = event.getTrackId();
